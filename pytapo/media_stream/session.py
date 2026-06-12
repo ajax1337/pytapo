@@ -111,7 +111,11 @@ class HttpMediaSession:
             # Step one: perform unauthenticated request
             await self._send_http_request(req_line, headers)
 
-            data = await self._reader.readuntil(b"\r\n\r\n")
+            # Sleeping battery cameras accept the TCP connection but never
+            # answer the handshake; an unbounded read would hang forever.
+            data = await asyncio.wait_for(
+                self._reader.readuntil(b"\r\n\r\n"), timeout=CONNECTION_TIMEOUT
+            )
             res_line, headers_block = data.split(b"\r\n", 1)
             _, status_code, _ = parse_http_response(res_line)
             res_headers = parse_http_headers(headers_block)
@@ -168,7 +172,9 @@ class HttpMediaSession:
             await self._send_http_request(req_line, headers)
 
             # Ensure the request was successful
-            data = await self._reader.readuntil(b"\r\n\r\n")
+            data = await asyncio.wait_for(
+                self._reader.readuntil(b"\r\n\r\n"), timeout=CONNECTION_TIMEOUT
+            )
             res_line, headers_block = data.split(b"\r\n", 1)
             logger.debug("Before parsing http response")
             logger.debug(res_line)
