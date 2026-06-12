@@ -50,6 +50,8 @@ class Streamer:
         self.outputDirectory = outputDirectory
         self.window_size = int(window_size) if window_size else 50
         self.stream_task = None
+        self.streamProcess = None
+        self.log_task = None
         self.quality = quality
         self.running = False
         self.logLevel = logLevel
@@ -239,7 +241,9 @@ class Streamer:
             pass_fds=pass_fds,
         )
 
-        asyncio.create_task(self._print_ffmpeg_logs(self.streamProcess.stderr))
+        self.log_task = asyncio.create_task(
+            self._print_ffmpeg_logs(self.streamProcess.stderr)
+        )
 
         self.running = True
         if self.stream_task is None or self.stream_task.done():
@@ -256,6 +260,16 @@ class Streamer:
             "streamProcess": self.stream_task,
             "read_fd": read_fd,
         }
+
+    def _close_audio_pipe(self):
+        for attr in ("audio_w", "audio_r"):
+            fd = getattr(self, attr)
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                setattr(self, attr, None)
 
     async def _print_ffmpeg_logs(self, stderr):
         while True:
@@ -343,3 +357,5 @@ class Streamer:
                 pass
             except OSError:
                 pass
+
+        self._close_audio_pipe()

@@ -56,9 +56,9 @@ class AESHelper:
         super_secret_key: AnyStr,
         encryptionMethod: EncryptionMethod,
     ):
-        if type(cloud_password) == str:
+        if isinstance(cloud_password, str):
             cloud_password = cloud_password.encode()
-        if type(key_exchange) == str:
+        if isinstance(key_exchange, str):
             key_exchange = key_exchange.encode()
 
         key_exchange = {

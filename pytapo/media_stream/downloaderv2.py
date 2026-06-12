@@ -1,4 +1,7 @@
-# this is something that is not finished, it is very similar to the new modern streamer class it is based on, and once finished should have better perofrmance than downloader class. Hoever it misses a lot of stuff - jsons for finish of the stream, retrys, reverse compatbiility etc...
+# this is something that is not finished, it is very similar to the new modern
+# streamer class it is based on, and once finished should have better
+# performance than downloader class. However it misses a lot of stuff - jsons
+# for finish of the stream, retries, reverse compatibility etc...
 
 import json
 from pytapo import Tapo
@@ -36,7 +39,7 @@ class DownloaderV2:
         analyzeDuration=0,
         includeAudio=False,
         mode="pipe",
-        ff_args={},
+        ff_args=None,
     ):
         self.downloadedSeconds = 0
         self.currentAction = "Idle"
@@ -55,6 +58,8 @@ class DownloaderV2:
         self.outputDirectory = outputDirectory
         self.window_size = int(window_size) if window_size else 50
         self.stream_task = None
+        self.streamProcess = None
+        self.log_task = None
         self.quality = quality
         self.running = False
         self.logLevel = logLevel
@@ -69,7 +74,7 @@ class DownloaderV2:
         self.audio_rate = None
         self._ts_buffer = bytearray()
         self._audio_buffer = bytearray()
-        self.ff_args = ff_args
+        self.ff_args = ff_args or {}
         self.duration = self.endTime - self.startTime + (self.padding or 0)
         self._cut_done = False
 
@@ -227,7 +232,9 @@ class DownloaderV2:
             pass_fds=pass_fds,
         )
 
-        asyncio.create_task(self._print_ffmpeg_logs(self.streamProcess.stderr))
+        self.log_task = asyncio.create_task(
+            self._print_ffmpeg_logs(self.streamProcess.stderr)
+        )
 
         self.running = True
         if self.stream_task is None or self.stream_task.done():
@@ -268,6 +275,7 @@ class DownloaderV2:
                                 os.close(self.audio_w)
                             except OSError:
                                 pass
+                            self.audio_w = None
                         self.running = False
                         self.currentAction = "Finished"
 
@@ -343,7 +351,31 @@ class DownloaderV2:
                     self.streamProcess.stdin.write(packet)
 
                 if not self.includeAudio:
-                    await self.streamProcess.stdin.drain()
+                    try:
+                        # If the consumer stops reading the pipe, ffmpeg output hangs.
+                        # This causes ffmpeg to stop reading stdin, which makes drain()
+                        # block forever. A timeout cleanly breaks the deadlock.
+                        await asyncio.wait_for(
+                            self.streamProcess.stdin.drain(), timeout=15.0
+                        )
+                    except (
+                        ConnectionResetError,
+                        BrokenPipeError,
+                        ConnectionAbortedError,
+                        asyncio.TimeoutError,
+                    ):
+                        self.running = False
+                        break
+
+    def _close_audio_pipe(self):
+        for attr in ("audio_w", "audio_r"):
+            fd = getattr(self, attr)
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                setattr(self, attr, None)
 
     async def stop(self):
         self.currentAction = "Stopping stream"
@@ -354,3 +386,14 @@ class DownloaderV2:
                 await self.stream_task
             except asyncio.CancelledError:
                 pass
+
+        if self.streamProcess:
+            try:
+                self.streamProcess.terminate()
+                await self.streamProcess.wait()
+            except ProcessLookupError:
+                pass
+            except OSError:
+                pass
+
+        self._close_audio_pipe()

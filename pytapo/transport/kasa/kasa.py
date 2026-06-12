@@ -2,7 +2,7 @@ import logging
 import ssl
 from contextlib import suppress
 from ...const import EncryptionMethod, MAX_LOGIN_RETRIES
-from kasa import Device, DeviceConfig, DeviceError, Discover, Credentials
+from kasa import DeviceConfig, DeviceError, Discover, Credentials
 
 from kasa.deviceconfig import (
     DeviceConnectionParameters,
@@ -132,7 +132,8 @@ class Kasa:
             raise
         except Exception as err:
             self.debugLog(f"kasa query failed: {err}")
-            # todo: this might be sometimes needed on stopiteration error but was solved by using executeFunction instead for a call
+            # todo: this might be sometimes needed on stopiteration error
+            # but was solved by using executeFunction instead for a call
             # if self._is_kasa_stop_iteration(err) and isinstance(raw_response, dict):
             #    self.debugLog(
             #        f"Caught kasa error {err}, and raw response is available. Returning."
@@ -214,7 +215,8 @@ class Kasa:
                     "kasa discover_single timed out, trying direct connect..."
                 )
                 self.warnLog(
-                    f"Failed to automatically discover details of device {self.host}. Attempting to connect directly by trying all authentication methods."
+                    f"Failed to automatically discover details of device {self.host}. "
+                    "Attempting to connect directly by trying all authentication methods."
                 )
                 for encrypt_type in DeviceEncryptionType:
                     if encrypt_type is DeviceEncryptionType.Klap:
@@ -465,14 +467,21 @@ class Kasa:
             required_cipher = fallback_cipher or default_cipher
             if required_cipher and required_cipher not in default_ciphers:
                 self.warnLog(
-                    f"Please report this issue to maintainers of python-kasa at https://github.com/python-kasa/python-kasa/issues/new so that the required cipher {required_cipher} can be added. The cipher most likely needs to be added to /transports/sslaestransport.py."
+                    "Please report this issue to maintainers of python-kasa at "
+                    "https://github.com/python-kasa/python-kasa/issues/new so that "
+                    f"the required cipher {required_cipher} can be added. The cipher "
+                    "most likely needs to be added to /transports/sslaestransport.py."
                 )
             else:
                 self.warnLog(
-                    f"Please report this issue to maintainers of pytapo at https://github.com/JurajNyiri/pytapo/issues/new since the required cipher {required_cipher} is inside of the default context but the request still failed."
+                    "Please report this issue to maintainers of pytapo at "
+                    "https://github.com/JurajNyiri/pytapo/issues/new since the "
+                    f"required cipher {required_cipher} is inside of the default "
+                    "context but the request still failed."
                 )
             self.warnLog(
-                "Integration will continue to work and accept any cipher on the device, but will output this warning message."
+                "Integration will continue to work and accept any cipher on the "
+                "device, but will output this warning message."
             )
         except Exception:
             pass

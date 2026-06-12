@@ -182,7 +182,7 @@ class Tapo:
                     }
                 )["result"]["responses"][0]
 
-        if type(data) == list:
+        if isinstance(data, list):
             return data
 
         if "result" in data and (
@@ -1164,7 +1164,7 @@ class Tapo:
 
     # channels example: ['off', 'on', 'off']
     # sensitivity example: ['10', '10', '10']
-    def setPirDetConfig(self, enabled: bool = None, channels=[], sensitivity=[]):
+    def setPirDetConfig(self, enabled: bool = None, channels=None, sensitivity=None):
         config = {}
         if enabled is not None:
             config["enabled"] = "on" if enabled else "off"
@@ -2271,11 +2271,13 @@ class Tapo:
         )
         return self.executeFunction("setLightFrequencyInfo", data)
 
-    # no need for chn_id, because setting it only works on chn_id 1, when setter called on 2, nothing happens, when on 1, both adjusted
+    # no need for chn_id, because setting it only works on chn_id 1,
+    # when setter called on 2, nothing happens, when on 1, both adjusted
     def getLightFrequencyMode(self) -> str:
         return self.__getImageCommon("light_freq_mode")
 
-    # no need for chn_id, because setting it only works on chn_id 1, when setter called on 2, nothing happens, when on 1, both adjusted
+    # no need for chn_id, because setting it only works on chn_id 1,
+    # when setter called on 2, nothing happens, when on 1, both adjusted
     def setLightFrequencyMode(self, mode):
         # todo: auto does not work on some child cameras?
         allowed_modes = ["auto", "50", "60"]
@@ -2433,7 +2435,9 @@ class Tapo:
 
     # Used for purposes of HomeAssistant-Tapo-Control
     # Uses method names from https://md.depau.eu/s/r1Ys_oWoP
-    def getMost(self, omit_methods=[], chn_id: list = None):
+    def getMost(self, omit_methods=None, chn_id: list = None):
+        if omit_methods is None:
+            omit_methods = []
         if self.deviceType == "SMART.TAPOCHIME":
             requestData = {
                 "method": "multipleRequest",

@@ -53,8 +53,7 @@ def check_and_correct_http_response(data: bytes) -> bytes:
             pos = decode_data.find(v)
             if pos != -1:
                 return decode_data[pos:].encode()
-    else:
-        return data
+    return data
 
 
 def parse_http_response(res_line: bytes) -> Tuple[bytes, int, Optional[bytes]]:
@@ -81,7 +80,7 @@ def parse_time(b: bytes) -> int:
 def index_from(b: bytes, sep: bytes, start_index: int) -> int:
     if start_index > 0:
         if start_index < len(b):
-            if i := b.find(sep, start_index) != -1:
+            if (i := b.find(sep, start_index)) != -1:
                 return i
         return -1
     return b.find(sep)

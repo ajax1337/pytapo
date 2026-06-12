@@ -51,19 +51,52 @@ class Convert:
             async with aiofiles.open(tempAudioFileLocation, "wb") as file:
                 await file.write(self.audioWriter.getvalue())
 
-            cmd = 'ffmpeg -ss 00:00:00 -i "{inputVideoFile}" -f {audioFormat} -ar {audioRate} -i "{inputAudioFile}" -t {videoLength} -y -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 "{outputFile}" >{devnull} 2>&1'.format(
-                inputVideoFile=tempVideoFileLocation,
-                inputAudioFile=tempAudioFileLocation,
-                outputFile=fileLocation,
-                videoLength=str(datetime.timedelta(seconds=fileLength)),
-                devnull=os.devnull,
-                audioFormat=audio_format,
-                audioRate=audio_rate,
-            )
-            os.system(cmd)
-
-            os.remove(tempVideoFileLocation)
-            os.remove(tempAudioFileLocation)
+            cmd = [
+                "ffmpeg",
+                "-ss",
+                "00:00:00",
+                "-i",
+                tempVideoFileLocation,
+                "-f",
+                audio_format,
+                "-ar",
+                str(audio_rate),
+                "-i",
+                tempAudioFileLocation,
+                "-t",
+                str(datetime.timedelta(seconds=fileLength)),
+                "-y",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                fileLocation,
+            ]
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                if result.returncode != 0:
+                    stderr_tail = result.stderr.decode(errors="replace")[-1000:]
+                    raise Exception(
+                        f"ffmpeg failed with exit code {result.returncode}: {stderr_tail}"
+                    )
+            except FileNotFoundError:
+                raise Exception(
+                    "ffmpeg is not installed or not in PATH, it is required to save recordings"
+                )
+            finally:
+                for tempFile in (tempVideoFileLocation, tempAudioFileLocation):
+                    try:
+                        os.remove(tempFile)
+                    except OSError:
+                        pass
         else:
             raise Exception("Method not supported")
 
@@ -100,13 +133,21 @@ class Convert:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                 )
+                if result.returncode != 0:
+                    raise Exception(
+                        f"ffprobe failed with exit code {result.returncode}: "
+                        + result.stdout.decode(errors="replace")[-500:]
+                    )
                 detectedLength = float(result.stdout)
                 self.known_lengths[self.addedChunks] = detectedLength
                 self.lengthLastCalculatedAtChunk = self.addedChunks
+        except FileNotFoundError:
+            logger.warning(
+                "ffprobe is not installed or not in PATH, "
+                "could not calculate length from stream."
+            )
         except Exception as e:
-            print("")
-            print(e)
-            print("Warning: Could not calculate length from stream.")
+            logger.warning("Could not calculate length from stream: %s", e)
         finally:
             if tmp_name is not None:
                 try:

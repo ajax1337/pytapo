@@ -17,8 +17,6 @@ class Klap:
         password: str,
         KLAPVersion: int = None,
     ):
-        print("PASSED KLAP:")
-        print(KLAPVersion)
         self.host = host
         self.controlPort = controlPort
         self.user = user
@@ -99,13 +97,15 @@ class Klap:
             if self.klapTransport is not None:
                 await self.klapTransport.close()
 
-    def getEncryptionMethod():
+    def getEncryptionMethod(self):
         return EncryptionMethod.SHA256
 
     async def close(self):
-        await self.klapTransport.close()
+        if self.klapTransport is not None:
+            await self.klapTransport.close()
 
     async def _initiateKlapTransport(self, version=1):
+        transport = None
         try:
             if self.klapTransport is None:
                 creds = Credentials(self.user, self.password)
@@ -116,11 +116,14 @@ class Klap:
                     transport = KlapTransport(config=config)
                 elif version == 2:
                     transport = KlapTransportV2(config=config)
+                else:
+                    raise ValueError(f"Unsupported KLAP version: {version}")
                 await transport.perform_handshake()
                 self.klapTransport = transport
                 return self.klapTransport
         finally:
-            await transport.close()
+            if transport is not None:
+                await transport.close()
 
     def debugLog(self, msg: str):
         pass

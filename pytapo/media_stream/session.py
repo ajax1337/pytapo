@@ -28,6 +28,11 @@ from .tsReader import TSReader
 
 logger = logging.getLogger(__name__)
 
+# Sanity bound for a single multipart part announced by the device. Parts are
+# small JSON messages or video chunks; anything larger indicates a corrupt or
+# malicious stream and would otherwise cause unbounded memory allocation.
+MAX_PART_LENGTH = 32 * 1024 * 1024
+
 
 class HttpMediaSession:
     def __init__(
@@ -40,8 +45,9 @@ class HttpMediaSession:
         port: int = 8800,
         username: str = "admin",
         multipart_boundary: bytes = b"--client-stream-boundary--",
-        query_params: dict = {},
+        query_params: dict = None,
     ):
+        query_params = query_params or {}
         self.ip = ip
         self.window_size = window_size
         self.cloud_password = cloud_password
@@ -252,6 +258,10 @@ class HttpMediaSession:
             headers = parse_http_headers(headers_block)
             mimetype = headers["Content-Type"]
             length = int(headers["Content-Length"])
+            if length < 0 or length > MAX_PART_LENGTH:
+                raise ValueError(
+                    f"Device announced an invalid part length: {length}"
+                )
             encrypted = bool(int(headers["X-If-Encrypt"]))
 
             if "X-Session-Id" in headers:
@@ -428,7 +438,7 @@ class HttpMediaSession:
             queue = asyncio.Queue(128)
             self._sequence_numbers[sequence] = queue
 
-        if type(data) == str:
+        if isinstance(data, str):
             data = data.encode()
 
         headers = {
@@ -487,12 +497,6 @@ class HttpMediaSession:
                             coro, timeout=no_data_timeout
                         )
                     except asyncio.exceptions.TimeoutError:
-                        print(
-                            "Server did not send a new chunk in {} sec (sequence {}"
-                            ", session {}), assuming the stream is over".format(
-                                no_data_timeout, sequence, session
-                            )
-                        )
                         logger.debug(
                             "Server did not send a new chunk in {} sec (sequence {}"
                             ", session {}), assuming the stream is over".format(

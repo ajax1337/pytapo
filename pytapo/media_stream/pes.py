@@ -1,5 +1,9 @@
+import logging
+
 from rtp import RTP, PayloadType
 from ..media_stream._utils import parse_time, annexB2AVC
+
+logger = logging.getLogger(__name__)
 
 
 class PES:
@@ -34,7 +38,7 @@ class PES:
                 b = b[5:]
 
             if self.Mode == self.ModeUnknown:
-                print("WARNING: mpegts: unknown zero-size stream")
+                logger.warning("mpegts: unknown zero-size stream")
 
         else:
             self.Mode = self.ModeSize
@@ -73,7 +77,7 @@ class PES:
                     ts = parse_time(self.Payload[self.minHeaderSize :]) % (2**32)
 
                 # Retrieval via hub does not get timestamp.
-                if (type(ts) != int) or ((ts < 0) or (ts >= 2**32)):
+                if not isinstance(ts, int) or ((ts < 0) or (ts >= 2**32)):
                     ts = 0
 
                 streamType = None
@@ -112,8 +116,7 @@ class PES:
 
         elif self.Mode == self.ModeStream:
             # todo: implement
-            print("TODO IMPLEMENT is this needed?")
-            raise Exception("TODO IMPLEMENT, needed?")
+            raise NotImplementedError("mpegts: PES stream mode parsing is not implemented")
         else:
             self.Payload = None
         return pkt

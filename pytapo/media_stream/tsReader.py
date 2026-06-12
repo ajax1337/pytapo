@@ -1,4 +1,8 @@
+import logging
+
 from ..media_stream.pes import PES
+
+logger = logging.getLogger(__name__)
 
 
 class TSReader:
@@ -65,7 +69,7 @@ class TSReader:
             if flag & const_has_adaption_field != 0:
                 ad_size = self.read_byte()  # Adaptation field length
                 if ad_size > self.PacketSize - 6:
-                    print("WARNING: mpegts: wrong adaptation size")
+                    logger.warning("mpegts: wrong adaptation size")
                     continue
                 self.skip(ad_size)
 
@@ -164,7 +168,7 @@ class TSReader:
         if self.i != 0:
             self.b = self.b[self.PacketSize :]
             self.i = 0
-            self.s = self
+            self.s = self.PacketSize
 
         # if packet available
         if len(self.b) < self.PacketSize:

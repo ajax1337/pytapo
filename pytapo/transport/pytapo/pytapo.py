@@ -402,7 +402,8 @@ class pyTapo:
             ):
                 transientRetryCount += 1
                 self.debugLog(
-                    f"Transient connection error ({err}), retrying request: {transientRetryCount}/{TRANSIENT_REQUEST_RETRIES}."
+                    f"Transient connection error ({err}), retrying request: "
+                    f"{transientRetryCount}/{TRANSIENT_REQUEST_RETRIES}."
                 )
                 self._resetHttpSession()
                 time.sleep(RETRY_BACKOFF_SECONDS)
@@ -542,7 +543,9 @@ class pyTapo:
             or (
                 res.status_code != 200
                 and res.status_code != 500
-                and self._isSecureConnection()  # pass responseIsOK for secure connections 500 which are communicating expiring session
+                # pass responseIsOK for secure connections 500
+                # which are communicating expiring session
+                and self._isSecureConnection()
             )
         ):
             raise Exception(
