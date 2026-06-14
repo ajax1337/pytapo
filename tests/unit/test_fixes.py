@@ -7,6 +7,7 @@ from unittest import mock
 
 import pytest
 
+from pytapo import Tapo
 from pytapo.media_stream._utils import (
     check_and_correct_http_response,
     index_from,
@@ -160,6 +161,19 @@ class TestConvertSave:
         leftovers = [p.name for p in tmp_path.iterdir()]
         assert leftovers == []
 
+    def test_saves_video_only_when_no_audio_payload_exists(self, tmp_path):
+        convert = Convert()
+        convert.writer.write(b"\x47" * 188)
+        out_file = str(tmp_path / "out.mp4")
+        run_mock = mock.Mock(
+            return_value=subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
+        )
+        with mock.patch("pytapo.media_stream.convert.subprocess.run", run_mock):
+            asyncio.run(convert.save(out_file, 1))
+        cmd = run_mock.call_args[0][0]
+        assert "-an" in cmd
+        assert all(not arg.endswith((".alaw", ".mulaw")) for arg in cmd)
+
 
 class TestConvertCalculateLength:
     def test_missing_ffprobe_returns_false(self):
@@ -189,3 +203,50 @@ class TestConvertCalculateLength:
             ),
         ):
             assert convert.calculateLength() == 12.5
+
+
+class TestHubStorageChild:
+    def _make_tapo(self):
+        tapo = object.__new__(Tapo)
+        tapo.childID = "child-device-id"
+        tapo.playerID = "PLAYER"
+        tapo.hubStorageChild = {
+            "alias": "GATE 1",
+            "device_id": "child-device-id",
+            "device_model": "C425",
+            "device_type": "SMART.IPCAMERA",
+            "hub_storage_enabled": True,
+            "mac": "40AE309863E3",
+            "network_mode": "wireless",
+        }
+        tapo.logger = mock.Mock()
+        return tapo
+
+    def test_hub_storage_recording_query_uses_child_identifiers(self):
+        tapo = self._make_tapo()
+        tapo.executeFunction = mock.Mock(
+            return_value={"playback": {"search_video_results": []}}
+        )
+
+        tapo.getRecordingsUTC(1781460517, 1781460529, 3, 4)
+
+        method, params = tapo.executeFunction.call_args[0]
+        assert method == "searchVideoWithUTC"
+        query = params["playback"]["search_video_with_utc"]
+        assert query["child_device_id"] == "child-device-id"
+        assert query["child_device_mac"] == "40AE309863E3"
+        assert query["player_id"] == "PLAYER"
+        assert "id" not in query
+
+    def test_hub_storage_download_request_uses_download_payload(self):
+        tapo = self._make_tapo()
+
+        payload = tapo.getHubStorageDownloadRequest(1781460517, 1781460529)
+
+        assert payload["params"]["method"] == "get"
+        assert "download" in payload["params"]
+        download = payload["params"]["download"]
+        assert download["dev_id"] == "child-device-id"
+        assert download["mac"] == "40AE309863E3"
+        assert download["player_id"] == "PLAYER"
+        assert download["client_id"] == 1

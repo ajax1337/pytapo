@@ -8,7 +8,7 @@ from .transport.transport import Transport
 from .logger import Logger
 from .asyncHandler import AsyncHandler
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from warnings import warn
 
 from .const import ERROR_CODES, MAX_LOGIN_RETRIES
@@ -99,13 +99,34 @@ class Tapo:
         self.superSecretKey = superSecretKey
         self.userID = False
         self.childID = childID
+        self.hubStorageChild = None
         self.timeCorrection = False
         if streamPort is None:
             self.streamPort = 8800
         else:
             self.streamPort = streamPort
 
-        self.basicInfo = self.getBasicInfo()
+        try:
+            self.basicInfo = self.getBasicInfo()
+        except Exception as err:
+            if childID is None:
+                raise err
+            self.logger.debugLog(
+                f"Child {childID} did not answer through controlChild, "
+                "checking H200 hub-storage camera list."
+            )
+            self.childID = None
+            try:
+                hubStorageChild = self._findHubStorageChild(childID)
+            except Exception:
+                self.childID = childID
+                raise err
+            if hubStorageChild is None:
+                self.childID = childID
+                raise err
+            self.hubStorageChild = hubStorageChild
+            self.childID = childID
+            self.basicInfo = self._hubStorageChildBasicInfo(hubStorageChild)
         if "type" in self.basicInfo:
             self.deviceType = self.basicInfo["type"]
         elif (
@@ -212,7 +233,7 @@ class Tapo:
 
     def performRequest(self, requestData, loginRetryCount=0):
         self.asyncHandler.executeAsyncExecutorJob(self.transport.authenticate)
-        if self.childID:
+        if self.childID and self.hubStorageChild is None:
             fullRequest = {
                 "method": "multipleRequest",
                 "params": {
@@ -273,7 +294,7 @@ class Tapo:
                 )
 
         # strip away child device stuff to ensure consistent response format for HUB cameras
-        if self.childID:
+        if self.childID and self.hubStorageChild is None:
             responses = []
             for response in responseJSON["result"]["responses"]:
                 if "method" in response and response["method"] == "controlChild":
@@ -298,7 +319,27 @@ class Tapo:
 
     def getMediaSession(self, stream_type: StreamType = None, start_time=""):
         query_params = {}
-        if self.childID is not None:
+        if self.hubStorageChild is not None:
+            if stream_type == StreamType.Download:
+                query_params = {
+                    "camera_mac": self.hubStorageChild["mac"],
+                    "playerId": self.playerID,
+                    "type": "download",
+                    "media_type": 0,
+                }
+            elif stream_type == StreamType.Stream:
+                query_params = {
+                    "camera_mac": self.hubStorageChild["mac"],
+                    "playerId": self.playerID,
+                    "type": "playback",
+                }
+                if start_time:
+                    query_params["start_time"] = start_time
+            else:
+                raise Exception(
+                    "Incorrect stream type. Choose StreamType.Stream or StreamType.Download."
+                )
+        elif self.childID is not None:
             if stream_type == StreamType.Download:
                 query_params = {
                     "deviceId": self.childID,
@@ -330,6 +371,79 @@ class Tapo:
             "getChildDeviceList",
             {"childControl": {"start_index": 0}},
         )
+
+    def getGeneralDevices(self):
+        return self.executeFunction(
+            "getGeneralDeviceList",
+            {"general_camera_manage": {"paired_general_device_list": {}}},
+        )
+
+    def _findHubStorageChild(self, childID):
+        wanted = str(childID).lower().replace(":", "").replace("-", "")
+        result = self.getGeneralDevices()
+        cameras = result.get("general_camera_manage", {}).get(
+            "paired_general_device_list", []
+        )
+        for camera in cameras:
+            candidates = [
+                str(camera.get("device_id") or "").lower(),
+                str(camera.get("mac") or "").lower().replace(":", "").replace("-", ""),
+                str(camera.get("alias") or "").lower(),
+            ]
+            if wanted in candidates and camera.get("hub_storage_enabled") is not False:
+                return camera
+        return None
+
+    def _hubStorageChildBasicInfo(self, camera):
+        model = camera.get("device_model") or camera.get("model") or ""
+        alias = camera.get("alias") or camera.get("device_name") or model or self.childID
+        mac = camera.get("mac") or ""
+        power = camera.get("power") or (
+            "BATTERY" if model.upper().startswith(("C4", "D2")) else ""
+        )
+        basic_info = {
+            "device_type": camera.get("device_type") or "SMART.IPCAMERA",
+            "device_model": model,
+            "device_alias": alias,
+            "mac": mac,
+            "dev_id": camera.get("device_id") or self.childID,
+            "hw_version": camera.get("hw_version") or "",
+            "sw_version": camera.get("sw_version") or "",
+            "power": power,
+            "hub_storage_enabled": True,
+            "network_mode": camera.get("network_mode"),
+        }
+        return {"device_info": {"basic_info": basic_info}}
+
+    def _hubStorageChildMost(self):
+        return {
+            "getDeviceInfo": [self._hubStorageChildBasicInfo(self.hubStorageChild)],
+            "getChildDeviceList": [False],
+            "getGeneralDeviceList": [False],
+        }
+
+    def getHubStorageDownloadRequest(self, start_time, end_time):
+        if self.hubStorageChild is None:
+            raise Exception("Hub storage download is only available for hub storage child cameras.")
+        return {
+            "type": "request",
+            "seq": 1,
+            "params": {
+                "method": "get",
+                "download": {
+                    "audio_config": {"encode_type": "OPUS", "sample_rate": "16"},
+                    "dev_id": self.hubStorageChild["device_id"],
+                    "mac": self.hubStorageChild["mac"],
+                    "channels": [0],
+                    "client_id": 1,
+                    "end_time": str(end_time),
+                    "event_type": [],
+                    "media_type": 0,
+                    "player_id": self.playerID,
+                    "start_time": str(start_time),
+                },
+            },
+        }
 
     def getChildDeviceComponentList(self):
         return self.executeFunction(
@@ -1192,6 +1306,8 @@ class Tapo:
         )
 
     def getBasicInfo(self):
+        if self.hubStorageChild is not None:
+            return self._hubStorageChildBasicInfo(self.hubStorageChild)
         if self.isKLAP:
             return self.executeFunction("get_device_info", None)
         else:
@@ -1446,6 +1562,24 @@ class Tapo:
     def getRecordingsList(self, start_date="20000101", end_date=None):
         if end_date is None:
             end_date = datetime.today().strftime("%Y%m%d")
+        if self.hubStorageChild is not None:
+            result = self.executeFunction(
+                "searchDateWithVideo",
+                {
+                    "playback": {
+                        "search_year_utility": {
+                            "channel": [0],
+                            "child_device_id": self.hubStorageChild["device_id"],
+                            "child_device_mac": self.hubStorageChild["mac"],
+                            "end_date": end_date,
+                            "start_date": start_date,
+                        }
+                    }
+                },
+            )
+            if "playback" not in result:
+                raise Exception("Video playback is not supported by this camera")
+            return result["playback"]["search_results"]
         result = self.executeFunction(
             "searchDateWithVideo",
             {
@@ -1466,6 +1600,29 @@ class Tapo:
         self, start_time, end_time, start_index=0, end_index=999999999, retry=False
     ):
         try:
+            if self.hubStorageChild is not None:
+                result = self.executeFunction(
+                    "searchVideoWithUTC",
+                    {
+                        "playback": {
+                            "search_video_with_utc": {
+                                "channel": 0,
+                                "child_device_id": self.hubStorageChild["device_id"],
+                                "child_device_mac": self.hubStorageChild["mac"],
+                                "end_time": end_time,
+                                "end_index": end_index,
+                                "player_id": self.playerID,
+                                "start_index": start_index,
+                                "start_time": start_time,
+                            }
+                        }
+                    },
+                )
+
+                if "playback" not in result:
+                    raise Exception("Video playback is not supported by this camera")
+
+                return result["playback"]["search_video_results"]
             result = self.executeFunction(
                 "searchVideoWithUTC",
                 {
@@ -1505,7 +1662,14 @@ class Tapo:
                 raise err
 
     def getRecordings(self, date, start_index=0, end_index=999999999, retry=False):
-        if self.childID is not None:
+        if self.hubStorageChild is not None:
+            date_object = datetime.strptime(date, "%Y%m%d").replace(tzinfo=timezone.utc)
+            start_time = int(date_object.timestamp())
+            end_time = int(
+                (date_object + timedelta(hours=23, minutes=59, seconds=59)).timestamp()
+            )
+            return self.getRecordingsUTC(start_time, end_time, start_index, end_index)
+        elif self.childID is not None:
             date_object = datetime.strptime(date, "%Y%m%d")
             start_time = int(date_object.timestamp())
             end_time = int(
@@ -2436,6 +2600,8 @@ class Tapo:
     # Used for purposes of HomeAssistant-Tapo-Control
     # Uses method names from https://md.depau.eu/s/r1Ys_oWoP
     def getMost(self, omit_methods=None, chn_id: list = None):
+        if self.hubStorageChild is not None:
+            return self._hubStorageChildMost()
         if omit_methods is None:
             omit_methods = []
         if self.deviceType == "SMART.TAPOCHIME":
@@ -2687,6 +2853,14 @@ class Tapo:
                         {
                             "method": "getChildDeviceList",
                             "params": {"childControl": {"start_index": 0}},
+                        },
+                        {
+                            "method": "getGeneralDeviceList",
+                            "params": {
+                                "general_camera_manage": {
+                                    "paired_general_device_list": {}
+                                }
+                            },
                         },
                         {
                             "method": "getRotationStatus",

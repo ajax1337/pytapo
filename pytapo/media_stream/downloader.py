@@ -137,21 +137,26 @@ class Downloader:
                 else:
                     mediaSession.set_window_size(self.window_size)
                 async with mediaSession:
-                    payload = {
-                        "type": "request",
-                        "seq": 1,
-                        "params": {
-                            "playback": {
-                                "client_id": self.tapo.getUserID(),
-                                "channels": [0, 1],
-                                "scale": "1/1",
-                                "start_time": str(self.startTime),
-                                "end_time": str(self.endTime),
-                                "event_type": [1, 2],
+                    if getattr(self.tapo, "hubStorageChild", None) is not None:
+                        payload = self.tapo.getHubStorageDownloadRequest(
+                            self.startTime, self.endTime
+                        )
+                    else:
+                        payload = {
+                            "type": "request",
+                            "seq": 1,
+                            "params": {
+                                "playback": {
+                                    "client_id": self.tapo.getUserID(),
+                                    "channels": [0, 1],
+                                    "scale": "1/1",
+                                    "start_time": str(self.startTime),
+                                    "end_time": str(self.endTime),
+                                    "event_type": [1, 2],
+                                },
+                                "method": "get",
                             },
-                            "method": "get",
-                        },
-                    }
+                        }
 
                     payload = json.dumps(payload)
                     dataChunks = 0
@@ -222,6 +227,12 @@ class Downloader:
                         elif resp.mimetype == "application/json":
                             try:
                                 json_data = json.loads(resp.plaintext.decode())
+                                if (
+                                    json_data.get("type") == "response"
+                                    and json_data.get("params", {}).get("error_code", 0)
+                                    != 0
+                                ):
+                                    raise Exception(f"Download failed: {json_data}")
 
                                 if (
                                     "type" in json_data
