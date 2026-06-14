@@ -211,12 +211,12 @@ class TestHubStorageChild:
         tapo.childID = "child-device-id"
         tapo.playerID = "PLAYER"
         tapo.hubStorageChild = {
-            "alias": "GATE 1",
+            "alias": "Future Hub Camera",
             "device_id": "child-device-id",
-            "device_model": "C425",
+            "device_model": "C999",
             "device_type": "SMART.IPCAMERA",
             "hub_storage_enabled": True,
-            "mac": "40AE309863E3",
+            "mac": "AABBCCDDEEFF",
             "network_mode": "wireless",
         }
         tapo.logger = mock.Mock()
@@ -234,7 +234,7 @@ class TestHubStorageChild:
         assert method == "searchVideoWithUTC"
         query = params["playback"]["search_video_with_utc"]
         assert query["child_device_id"] == "child-device-id"
-        assert query["child_device_mac"] == "40AE309863E3"
+        assert query["child_device_mac"] == "AABBCCDDEEFF"
         assert query["player_id"] == "PLAYER"
         assert "id" not in query
 
@@ -247,6 +247,33 @@ class TestHubStorageChild:
         assert "download" in payload["params"]
         download = payload["params"]["download"]
         assert download["dev_id"] == "child-device-id"
-        assert download["mac"] == "40AE309863E3"
+        assert download["mac"] == "AABBCCDDEEFF"
         assert download["player_id"] == "PLAYER"
         assert download["client_id"] == 1
+
+    def test_finds_any_enabled_hub_storage_camera(self):
+        tapo = object.__new__(Tapo)
+        tapo.getGeneralDevices = mock.Mock(
+            return_value={
+                "general_camera_manage": {
+                    "paired_general_device_list": [
+                        {
+                            "alias": "Not On Hub",
+                            "device_id": "disabled-id",
+                            "hub_storage_enabled": False,
+                            "mac": "111122223333",
+                        },
+                        {
+                            "alias": "New Camera",
+                            "device_id": "new-camera-id",
+                            "hub_storage_enabled": True,
+                            "mac": "AABBCCDDEEFF",
+                        },
+                    ]
+                }
+            }
+        )
+
+        assert tapo._findHubStorageChild("disabled-id") is None
+        assert tapo._findHubStorageChild("new-camera-id")["alias"] == "New Camera"
+        assert tapo._findHubStorageChild("aa:bb:cc:dd:ee:ff")["device_id"] == "new-camera-id"

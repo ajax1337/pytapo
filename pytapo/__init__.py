@@ -386,21 +386,29 @@ class Tapo:
         )
         for camera in cameras:
             candidates = [
-                str(camera.get("device_id") or "").lower(),
+                str(camera.get("device_id") or "")
+                .lower()
+                .replace(":", "")
+                .replace("-", ""),
                 str(camera.get("mac") or "").lower().replace(":", "").replace("-", ""),
                 str(camera.get("alias") or "").lower(),
             ]
-            if wanted in candidates and camera.get("hub_storage_enabled") is not False:
+            if wanted in candidates and self._isHubStorageEnabled(camera):
                 return camera
         return None
+
+    def _isHubStorageEnabled(self, camera):
+        value = camera.get("hub_storage_enabled")
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ("1", "on", "true", "yes")
+        return False
 
     def _hubStorageChildBasicInfo(self, camera):
         model = camera.get("device_model") or camera.get("model") or ""
         alias = camera.get("alias") or camera.get("device_name") or model or self.childID
         mac = camera.get("mac") or ""
-        power = camera.get("power") or (
-            "BATTERY" if model.upper().startswith(("C4", "D2")) else ""
-        )
         basic_info = {
             "device_type": camera.get("device_type") or "SMART.IPCAMERA",
             "device_model": model,
@@ -409,7 +417,7 @@ class Tapo:
             "dev_id": camera.get("device_id") or self.childID,
             "hw_version": camera.get("hw_version") or "",
             "sw_version": camera.get("sw_version") or "",
-            "power": power,
+            "power": camera.get("power") or "",
             "hub_storage_enabled": True,
             "network_mode": camera.get("network_mode"),
         }
