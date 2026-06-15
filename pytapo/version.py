@@ -1,1 +1,1 @@
-PYTAPO_VERSION = '3.4.15.post4'
+PYTAPO_VERSION = '3.4.15.post5'
