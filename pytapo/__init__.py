@@ -4,6 +4,8 @@
 import json
 import requests
 import uuid
+import time
+import random
 from .transport.transport import Transport
 from .logger import Logger
 from .asyncHandler import AsyncHandler
@@ -14,6 +16,19 @@ from warnings import warn
 from .const import ERROR_CODES, MAX_LOGIN_RETRIES
 from .media_stream.session import HttpMediaSession
 from .media_stream._utils import StreamType
+
+# Bounded retry-with-reauth for TRANSIENT concurrent-hub failures in
+# executeFunction: a malformed response that passes responseIsOK but lacks
+# "result" (-> KeyError('result')), or a transport-raised "Invalid
+# authentication data" surfacing under a concurrent hub auth/session collision.
+# Budget kept small on purpose: the standalone repro recovered 4/5 failures on a
+# SINGLE reauth, and self.close() drops the shared transport session, so a large
+# budget would amplify the close-churn under the integration's concurrent
+# coordinators (and during __init__'s getBasicInfo()). After the budget is
+# exhausted the LAST exception is re-raised unchanged.
+HUB_TRANSIENT_RETRIES = 2        # retries after the initial attempt (3 impl calls total)
+HUB_TRANSIENT_BACKOFF = 0.3      # seconds; sleep is min(BACKOFF*attempt, CAP) + jitter
+HUB_TRANSIENT_BACKOFF_CAP = 1.0  # seconds; per-attempt sleep ceiling
 
 
 class Tapo:
@@ -178,6 +193,78 @@ class Tapo:
             raise Exception("Unexpected response from Tapo Camera: " + str(e))
 
     def executeFunction(self, method, params, retry=False):
+        # Bounded retry-with-reauth wrapper around _executeFunctionImpl.
+        # Rides over TRANSIENT concurrent-hub failures ONLY (see
+        # _isTransientHubError): a malformed no-"result" response
+        # (-> KeyError('result')) or a transport-raised "Invalid authentication
+        # data" surfacing under a concurrent hub auth/session collision. On such
+        # a failure we drop the possibly-corrupted session (self.close(), forcing
+        # a fresh auth on the next call -- mirrors performRequest's -40401 path),
+        # back off, and retry. Any OTHER exception (the genuine "Error: <msg>,
+        # Response: ..." raised for real error codes, a KeyError on a different
+        # key, network errors) propagates IMMEDIATELY. After the budget is
+        # exhausted the LAST exception is re-raised unchanged.
+        #
+        # Concurrency caveat: when one Tapo instance is shared across the
+        # integration's coordinator threads, self.close() here drops the
+        # transport session for ALL callers (identical to the pre-existing
+        # -40401 self.close() in performRequest). A retry-close in one thread can
+        # briefly invalidate a sibling's in-flight call, which then re-enters
+        # this same bounded path. The small budget + jittered backoff keep the
+        # close-churn bounded but NOT globally coordinated; the real coordination
+        # fix is a flock-serialized single hub client (the production poller),
+        # not in-process locking here.
+        attempt = 0
+        while True:
+            try:
+                return self._executeFunctionImpl(method, params, retry)
+            except Exception as e:
+                if attempt >= HUB_TRANSIENT_RETRIES or not self._isTransientHubError(
+                    e
+                ):
+                    raise
+                attempt += 1
+                # Best-effort: a close() failure must not crash the retry.
+                try:
+                    self.close()
+                except Exception:
+                    pass
+                # base*attempt, capped, plus small jitter so concurrent retriers
+                # de-synchronize instead of re-colliding in lockstep.
+                backoff = min(
+                    HUB_TRANSIENT_BACKOFF * attempt, HUB_TRANSIENT_BACKOFF_CAP
+                )
+                time.sleep(backoff + random.random() * HUB_TRANSIENT_BACKOFF)
+
+    def _isTransientHubError(self, e):
+        # Precise classification of TRANSIENT concurrent-hub failures only --
+        # deliberately narrow so genuine non-transient errors are NOT retried.
+        #
+        # (a) Malformed "no result" response: _executeFunctionImpl (and
+        #     performRequest's child-control stripping) do
+        #     performRequest(...)["result"]["responses"], so a hub reply that
+        #     passes responseIsOK but lacks "result" raises KeyError('result').
+        #     Match the MISSING KEY EXACTLY via e.args[0] -- NOT a substring of
+        #     str(e), which would also catch unrelated keys like
+        #     KeyError('results') / KeyError('search_result') and so mask genuine
+        #     non-transient errors. (KeyError('responses')/IndexError from a
+        #     partial dict are intentionally NOT swept in: only KeyError('result')
+        #     was empirically observed; do not widen speculatively.)
+        if isinstance(e, KeyError):
+            return bool(e.args) and e.args[0] == "result"
+        # (b) Transport-level auth/session collision: "Invalid authentication
+        #     data" raised inside the transport authenticate/send, matched
+        #     case-insensitively. The genuine formatted API error
+        #     ("Error: <msg>, Response: ...") does not contain this phrase, so
+        #     real error-code responses are not retried. Note: the transport also
+        #     raises this exact phrase for a PERMANENT bad-cred / user_group!=root
+        #     failure (after its own reauth is exhausted); that cannot be told
+        #     apart from here, but the retry is bounded (HUB_TRANSIENT_RETRIES)
+        #     and the last exception is re-raised unchanged, so a real auth
+        #     failure still surfaces -- the wasted retry is acceptable.
+        return "invalid authentication data" in str(e).lower()
+
+    def _executeFunctionImpl(self, method, params, retry=False):
         if method == "multipleRequest":
             if params is not None:
                 data = self.performRequest(
@@ -214,9 +301,16 @@ class Tapo:
         elif "method" in data and "error_code" in data and data["error_code"] == 0:
             return data
         else:
+            # -64303 (cruise/MOTOR_BUSY): one in-place retry, exactly as before.
+            # This recurses into _executeFunctionImpl (NOT the public wrapper),
+            # so the original call's transient-retry budget is NOT multiplied
+            # (HARD REQ 3). setCruise() itself calls the PUBLIC executeFunction,
+            # so the nested cruiseStop gets its own independent transient budget
+            # -- intended and benign (-64303 only fires on a structured
+            # error_code, never on a transient, so the two never compound here).
             if "error_code" in data and data["error_code"] == -64303 and retry is False:
                 self.setCruise(False, retry=True)
-                return self.executeFunction(method, params, True)
+                return self._executeFunctionImpl(method, params, True)
             raise Exception(
                 "Error: {}, Response: {}".format(
                     (
